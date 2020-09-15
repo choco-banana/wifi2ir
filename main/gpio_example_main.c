@@ -9,10 +9,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "driver/gpio.h"
+#include "driver/spi_master.h"
 
 /**
  * Brief:
@@ -31,14 +33,31 @@
  *
  */
 
-#define GPIO_OUTPUT_IO_0    18
-#define GPIO_OUTPUT_IO_1    19
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0) | (1ULL<<GPIO_OUTPUT_IO_1))
-#define GPIO_INPUT_IO_0     4
-#define GPIO_INPUT_IO_1     5
-#define GPIO_INPUT_PIN_SEL  ((1ULL<<GPIO_INPUT_IO_0) | (1ULL<<GPIO_INPUT_IO_1))
-#define ESP_INTR_FLAG_DEFAULT 0
+#define PIN_NUM_MISO 25
+#define PIN_NUM_MOSI 23
+#define PIN_NUM_CLK  18
+#define PIN_NUM_CS   22
 
+typedef uint8_t ir_record[800];
+
+const ir_record on_off = {1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0, \
+                          1,0,0,0,1,0,0,0,1,0,0,0,1,0,1,0, \
+						  1,0,1,0,1,0,1,0,0,0,1,0,0,0,1,0, \
+						  0,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0, \
+						  0,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0, \
+						  0,0,1,0,1,0,0,0,1,0,0,0,1,0,0,0, \
+						  1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0};
+const uint8_t on_off_data[14] = {0xFF, 0x00, 0x88, 0x8A, 0xAA, 0x22, 0x2A, 0xAA, 0x2A, 0xAA, 0x28, 0x88, 0x88, 0x88};
+
+typedef enum e_state{
+	IDLE = 0,
+	SEND_ON_OFF,
+	SEND_ONE,
+	SEND_TWO,
+	SEND_THREE
+}e_state;
+
+static e_state state = SEND_ON_OFF; 
 static xQueueHandle gpio_evt_queue = NULL;
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
@@ -47,68 +66,84 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
 }
 
-static void gpio_task_example(void* arg)
+static void ir_input_task(void * arg)
 {
-    uint32_t io_num;
-    for(;;) {
-        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-            printf("GPIO[%d] intr, val: %d\n", io_num, gpio_get_level(io_num));
-        }
-    }
+	while(1)
+	{
+		vTaskDelay(1000 / portTICK_RATE_MS);
+	}
+}
+static void ir_output_task(void * arg)
+{
+	while(1)
+	{
+		vTaskDelay(100 / portTICK_RATE_MS);
+		switch(state)
+		{
+			case IDLE:
+			break;
+			case SEND_ON_OFF:
+				printf("Send ON_OFF.");
+				
+				state = IDLE;
+			break;
+			default:
+				printf("shouldn't be here!");
+		}
+	}
 }
 
 void app_main()
 {
-    gpio_config_t io_conf;
-    //disable interrupt
-    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-    //set as output mode
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO18/19
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    //disable pull-down mode
-    io_conf.pull_down_en = 0;
-    //disable pull-up mode
-    io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
-    gpio_config(&io_conf);
-
-    //interrupt of rising edge
-    io_conf.intr_type = GPIO_PIN_INTR_POSEDGE;
-    //bit mask of the pins, use GPIO4/5 here
-    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    //set as input mode    
-    io_conf.mode = GPIO_MODE_INPUT;
-    //enable pull-up mode
-    io_conf.pull_up_en = 1;
-    gpio_config(&io_conf);
-
-    //change gpio intrrupt type for one pin
-    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_ANYEDGE);
-
-    //create a queue to handle gpio event from isr
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    //start gpio task
-    xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
-
-    //install gpio isr service
-    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void*) GPIO_INPUT_IO_1);
-
-    //remove isr handler for gpio number.
-    gpio_isr_handler_remove(GPIO_INPUT_IO_0);
-    //hook isr handler for specific gpio pin again
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
-
+	esp_err_t ret;
+    spi_device_handle_t spi;
+    spi_bus_config_t buscfg={
+        .miso_io_num=PIN_NUM_MISO,
+        .mosi_io_num=PIN_NUM_MOSI,
+        .sclk_io_num=PIN_NUM_CLK,
+        .quadwp_io_num=-1,
+        .quadhd_io_num=-1,
+        .max_transfer_sz=50
+    };
+    spi_device_interface_config_t devcfg={
+        .clock_speed_hz=1777,           		//Clock out at 1.777kHz
+        .mode=0,                                //SPI mode 0
+        .spics_io_num=PIN_NUM_CS,               //CS pin
+        .queue_size=7,                          //We want to be able to queue 7 transactions at a time
+        //.pre_cb=lcd_spi_pre_transfer_callback,  //Specify pre-transfer callback to handle D/C line
+    };
+    //Initialize the SPI bus
+    ret=spi_bus_initialize(HSPI_HOST, &buscfg, 1);
+    ESP_ERROR_CHECK(ret);
+	ret=spi_bus_add_device(HSPI_HOST, &devcfg, &spi);
+    ESP_ERROR_CHECK(ret);
+	
+	//start ir input task
+	xTaskCreate(ir_input_task, "ir_input_task", 2048, NULL, 10, NULL);
+	//start ir output task
+	xTaskCreate(ir_output_task, "ir_output_task", 2048, NULL, 5, NULL);
+	
+	
+	static spi_transaction_t ir_out;
+	memset(&ir_out, 0, sizeof(spi_transaction_t));
+    //ir_out.flags=SPI_TRANS_USE_TXDATA;
+	ir_out.tx_buffer = on_off_data;
+	ir_out.length = 14*8;
+	for (int i=0;i<10;i++)
+	{
+		ret=spi_device_queue_trans(spi, &ir_out, portMAX_DELAY);
+		vTaskDelay(115 / portTICK_RATE_MS);
+	}
+	assert(ret==ESP_OK);
+	
+	
+	
     int cnt = 0;
     while(1) {
-        printf("cnt: %d\n", cnt++);
+        //printf("cnt: %d\n", cnt++);
         vTaskDelay(1000 / portTICK_RATE_MS);
-        gpio_set_level(GPIO_OUTPUT_IO_0, cnt % 2);
-        gpio_set_level(GPIO_OUTPUT_IO_1, cnt % 2);
+        //gpio_set_level(GPIO_OUTPUT_IO_0, cnt % 2);
+        //gpio_set_level(GPIO_OUTPUT_IO_1, cnt % 2);
     }
 }
 
