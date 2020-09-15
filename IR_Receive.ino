@@ -18,11 +18,12 @@
 // http://arduino.cc/en/Hacking/PinMapping168 for the 'raw' pin mapping
 //#define IRpin_PIN      PIND
 #define IRpin   13
+#define STARTpin   12
 
 // the maximum pulse we'll listen for - 65 milliseconds is a long time
 #define MAXPULSE 65000
 
-// what our timing resolution should be, larger is better
+// what our timing resolution shoud be, larger is better
 // as its more 'precise' - but too large and you wont get
 // accurate timing
 #define RESOLUTION 20
@@ -33,6 +34,7 @@ uint8_t currentpulse = 0; // index for pulses we're storing
 
 void setup(void) {
   pinMode(IRpin, INPUT);
+  pinMode(STARTpin, INPUT);
   Serial.begin(9600);
   Serial.println("Ready to decode IR!");
 }
@@ -41,6 +43,8 @@ void loop(void) {
   uint16_t highpulse, lowpulse;  // temporary storage timing
   highpulse = lowpulse = 0; // start out with no pulse length
   Serial.println("new loop");
+
+  while(!digitalRead(STARpin)){}
 
   while (digitalRead(IRpin)) { // this is too slow!
     //while (1 << IRpin) {
