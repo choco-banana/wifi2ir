@@ -21,7 +21,7 @@
 #define STARTpin   12
 
 // the maximum pulse we'll listen for - 65 milliseconds is a long time
-#define MAXPULSE 65000
+#define MAXPULSE 10000
 
 // what our timing resolution shoud be, larger is better
 // as its more 'precise' - but too large and you wont get
@@ -44,7 +44,7 @@ void loop(void) {
   highpulse = lowpulse = 0; // start out with no pulse length
   Serial.println("new loop");
 
-  while(!digitalRead(STARpin)){}
+  while(!digitalRead(STARTpin)){}
 
   while (digitalRead(IRpin)) { // this is too slow!
     //while (1 << IRpin) {
@@ -52,10 +52,10 @@ void loop(void) {
 
     // count off another few microseconds
     highpulse++;
-    //debug
-    Serial.println("high");
-    Serial.println(digitalRead(IRpin));
-    Serial.println(analogRead(IRpin));
+//    //debug
+//    Serial.println("high");
+//    Serial.println(digitalRead(IRpin));
+//    Serial.println(analogRead(IRpin));
     
     delayMicroseconds(RESOLUTION);
 
@@ -77,10 +77,10 @@ void loop(void) {
     // while (1 >> IRpin) {
     // pin is still LOW
     lowpulse++;
-    //debug
-    Serial.println("low");
-    Serial.println(digitalRead(IRpin));
-    Serial.println(analogRead(IRpin));
+//    //debug
+//    Serial.println("low");
+//    Serial.println(digitalRead(IRpin));
+//    Serial.println(analogRead(IRpin));
     
     delayMicroseconds(RESOLUTION);
     if ((lowpulse >= MAXPULSE)  && (currentpulse != 0)) {
